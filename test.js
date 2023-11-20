@@ -76,4 +76,32 @@ describe('ShakeSearch', () => {
     assert.isAbove(updatedResults.length, initialResults.length, 'More results should be added to the results table');
   });
 
+  it('should display an error message when search fails', async () => {
+    await page.setRequestInterception(true);
+    page.on('request', (request) => {
+      if (request.url().endsWith('/search')) {
+        request.respond({
+          status: 500,
+          contentType: 'text/plain',
+          body: 'Internal Server Error',
+        });
+      } else {
+        request.continue();
+      }
+    });
+
+    const query = 'horse';
+    await page.evaluate(() => (document.getElementById('query').value = ''));
+    await page.type('#query', query);
+    await page.click('button[type="submit"]');
+    await page.waitForSelector('#error-message');
+
+    const errorMessage = await page.evaluate(
+      () => document.getElementById('error-message').textContent
+    );
+    assert.isNotEmpty(errorMessage, 'An error message should be displayed');
+
+    await page.setRequestInterception(false);
+  });
+
 });

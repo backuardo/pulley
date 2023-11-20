@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"index/suffixarray"
@@ -9,6 +8,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 )
 
 func main() {
@@ -37,28 +38,43 @@ func main() {
 
 type Searcher struct {
 	CompleteWorks string
+	LowerCompleteWorks string
 	SuffixArray   *suffixarray.Index
 }
 
 func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
-		query, ok := r.URL.Query()["q"]
-		if !ok || len(query[0]) < 1 {
+		query := r.URL.Query().Get("q")
+		if query == "" {
 			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte("missing search query in URL params"))
+			w.Write([]byte("missing query parameter"))
 			return
 		}
-		results := searcher.Search(query[0])
-		buf := &bytes.Buffer{}
-		enc := json.NewEncoder(buf)
-		err := enc.Encode(results)
+
+		offsetStr := r.URL.Query().Get("offset")
+		limitStr := r.URL.Query().Get("limit")
+
+		offset, err := strconv.Atoi(offsetStr)
+		if err != nil {
+			offset = 0
+		}
+
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil || limit <= 0 {
+			limit = 20
+		}
+
+		results := searcher.Search(query, offset, limit)
+
+		jsonResponse, err := json.Marshal(results)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("encoding failure"))
+			w.Write([]byte("error encoding results"))
 			return
 		}
+
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(buf.Bytes())
+		w.Write(jsonResponse)
 	}
 }
 
@@ -68,15 +84,41 @@ func (s *Searcher) Load(filename string) error {
 		return fmt.Errorf("Load: %w", err)
 	}
 	s.CompleteWorks = string(dat)
-	s.SuffixArray = suffixarray.New(dat)
+	s.LowerCompleteWorks = strings.ToLower(s.CompleteWorks)
+	s.SuffixArray = suffixarray.New([]byte(s.LowerCompleteWorks))
 	return nil
 }
 
-func (s *Searcher) Search(query string) []string {
-	idxs := s.SuffixArray.Lookup([]byte(query), -1)
+func (s *Searcher) Search(query string, offset, limit int) []string {
+	lowerQuery := strings.ToLower(query)
+	idxs := s.SuffixArray.Lookup([]byte(lowerQuery), -1)
+
 	results := []string{}
-	for _, idx := range idxs {
-		results = append(results, s.CompleteWorks[idx-250:idx+250])
+	for i, idx := range idxs {
+		if i < offset {
+			continue
+		}
+		if len(results) >= limit {
+			break
+		}
+		start := max(0, idx-250)
+		end := min(len(s.CompleteWorks), idx+250)
+		results = append(results, s.CompleteWorks[start:end])
 	}
+
 	return results
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if b < a {
+		return a
+	}
+	return b
 }
